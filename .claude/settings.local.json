@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($bytes = [System.IO.File]::ReadAllBytes\\(\"C:\\\\Users\\\\tarie\\\\source\\\\repos\\\\FloatingMDI\\\\FloatingMDI\\\\FloatingMDI.rc\"\\); \"First 4 bytes: $\\($bytes[0..3] | ForEach-Object { '0x{0:X2}' -f $_ }\\)\")",
+      "PowerShell(Get-Process *)"
+    ]
+  }
+}
