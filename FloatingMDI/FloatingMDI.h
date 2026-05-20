@@ -65,3 +65,9 @@ LRESULT DefFloatingMDIChildProc(HWND hChild, UINT msg, WPARAM wParam, LPARAM lPa
 // Enable/disable auto-hiding the floating children when the frame is
 // minimized (and re-showing them on restore). wParam = TRUE to enable.
 #define FMCM_SET_HIDEFLOATS (WM_APP + 0x107)
+
+// Close every child (docked + floating). Each child receives a WM_CLOSE and
+// may veto — e.g. a save-changes prompt the user cancels. Returns TRUE if all
+// children closed (none remain), FALSE if any vetoed. A frame's WM_CLOSE
+// handler can gate frame destruction on the result.
+#define FMCM_CLOSEALL (WM_APP + 0x108)

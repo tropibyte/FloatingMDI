@@ -236,14 +236,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 SendMessageW(hMDIClient, WM_MDIICONARRANGE, 0, 0);
                 break;
             case IDM_WINDOW_CLOSE_ALL:
-                {
-                    HWND hChild = (HWND)SendMessageW(hMDIClient, WM_MDIGETACTIVE, 0, 0);
-                    while (hChild)
-                    {
-                        SendMessageW(hMDIClient, WM_MDIDESTROY, (WPARAM)hChild, 0);
-                        hChild = (HWND)SendMessageW(hMDIClient, WM_MDIGETACTIVE, 0, 0);
-                    }
-                }
+                // Closes docked + floating; each dirty child gets a prompt.
+                SendMessageW(hMDIClient, FMCM_CLOSEALL, 0, 0);
                 break;
             default:
                 // Child-activation IDs (>= idFirstChild) come from the Window
@@ -263,6 +257,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 gWorkspaceBrush = CreateSolidBrush(RGB(32, 32, 38));
             return (LRESULT)gWorkspaceBrush;
         }
+        return 0;
+
+    case WM_CLOSE:
+        // Query every child first — a dirty document may prompt and cancel.
+        if (SendMessageW(hMDIClient, FMCM_CLOSEALL, 0, 0))
+            DestroyWindow(hWnd);
         return 0;
 
     case WM_DESTROY:
@@ -299,7 +299,7 @@ LRESULT CALLBACK MDIChildWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM 
     case WM_LBUTTONDBLCLK:
         {
             // Demo: rename the child on double-click to exercise live
-            // tab-title sync. Toggles a " *" suffix on the caption.
+            // tab-title sync. The " *" suffix doubles as a "dirty" marker.
             WCHAR title[MAX_LOADSTRING + 16];
             GetWindowTextW(hWnd, title, ARRAYSIZE(title));
             int len = lstrlenW(title);
@@ -309,6 +309,28 @@ LRESULT CALLBACK MDIChildWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM 
                 lstrcatW(title, L" *");
             SetWindowTextW(hWnd, title);   // → DefFloatingMDIChildProc syncs the tab
             InvalidateRect(hWnd, nullptr, TRUE);
+        }
+        return 0;
+
+    case WM_CLOSE:
+        {
+            // Demo of the close-veto flow: a "dirty" document (" *" suffix)
+            // prompts; Cancel vetoes the close. A clean document closes
+            // silently. Agreeing routes through the MDI destroy path.
+            WCHAR title[MAX_LOADSTRING + 16];
+            GetWindowTextW(hWnd, title, ARRAYSIZE(title));
+            int len = lstrlenW(title);
+            bool dirty = (len >= 2 && title[len - 2] == L' ' && title[len - 1] == L'*');
+            if (dirty)
+            {
+                WCHAR prompt[MAX_LOADSTRING + 64];
+                wsprintfW(prompt, L"Save changes to \"%s\"?", title);
+                int r = MessageBoxW(hWnd, prompt, L"FloatingMDI",
+                                    MB_YESNOCANCEL | MB_ICONWARNING);
+                if (r == IDCANCEL)
+                    return 0;   // veto — child survives
+            }
+            SendMessageW(GetParent(hWnd), WM_MDIDESTROY, (WPARAM)hWnd, 0);
         }
         return 0;
     }

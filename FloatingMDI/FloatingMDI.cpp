@@ -228,11 +228,12 @@ static LRESULT CALLBACK FMHWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
 
     case WM_CLOSE:
     {
-        // Route to FMC so the standard WM_MDIDESTROY teardown happens
-        // (vector removal, tab cleanup if it had been re-docked, etc.).
+        // Let the hosted child decide — it may prompt or veto. If it agrees,
+        // it routes WM_MDIDESTROY back through us to FMC. A lazy child with no
+        // WM_CLOSE handler still works via DefFloatingMDIChildProc.
         auto* s = GetHostState(hWnd);
-        if (s && s->hOwnerFMC && s->hChild)
-            SendMessageW(s->hOwnerFMC, WM_MDIDESTROY, (WPARAM)s->hChild, 0);
+        if (s && s->hChild)
+            SendMessageW(s->hChild, WM_CLOSE, 0, 0);
         return 0;
     }
 
@@ -928,6 +929,20 @@ static LRESULT CALLBACK FMCWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     }
 
+    case FMCM_CLOSEALL:
+    {
+        auto* s = GetState(hWnd);
+        if (!s) return TRUE;
+        // Snapshot HWNDs — the vector mutates as children close themselves.
+        std::vector<HWND> snapshot;
+        snapshot.reserve(s->children.size());
+        for (auto& e : s->children) snapshot.push_back(e.hChild);
+        for (HWND h : snapshot)
+            if (IsWindow(h)) SendMessageW(h, WM_CLOSE, 0, 0);
+        // All gone → everyone agreed; survivors → someone vetoed.
+        return s->children.empty() ? TRUE : FALSE;
+    }
+
     case FMCM_FRAMEMINIMIZED:
     {
         auto* s = GetState(hWnd);
@@ -1226,7 +1241,9 @@ LRESULT DefFloatingFrameProc(HWND hWnd, HWND hMDIClient,
 // -----------------------------------------------------------------------------
 LRESULT DefFloatingMDIChildProc(HWND hChild, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    if (msg == WM_SETTEXT)
+    switch (msg)
+    {
+    case WM_SETTEXT:
     {
         // Apply the caption change first, then notify the parent.
         LRESULT r = DefWindowProcW(hChild, msg, wParam, lParam);
@@ -1234,6 +1251,19 @@ LRESULT DefFloatingMDIChildProc(HWND hChild, UINT msg, WPARAM wParam, LPARAM lPa
         if (parent)
             SendMessageW(parent, FMCM_CHILD_TITLECHANGED, (WPARAM)hChild, 0);
         return r;
+    }
+
+    case WM_CLOSE:
+        // Route close through the MDI destroy path so FMC/host bookkeeping
+        // stays correct (vector entry + tab removed). A child that wants to
+        // prompt or veto should handle WM_CLOSE itself instead of forwarding
+        // here — return without destroying to veto.
+        {
+            HWND parent = GetParent(hChild);
+            if (parent)
+                SendMessageW(parent, WM_MDIDESTROY, (WPARAM)hChild, 0);
+        }
+        return 0;
     }
     return DefWindowProcW(hChild, msg, wParam, lParam);
 }
