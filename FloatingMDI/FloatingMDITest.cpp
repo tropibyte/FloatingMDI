@@ -235,6 +235,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             case IDM_WINDOW_ARRANGE:
                 SendMessageW(hMDIClient, WM_MDIICONARRANGE, 0, 0);
                 break;
+            case IDM_WINDOW_CLOSE:
+                {
+                    // Ctrl+F4 — close the active tab via WM_CLOSE so it goes
+                    // through the child's veto/prompt path.
+                    HWND hChild = (HWND)SendMessageW(hMDIClient, WM_MDIGETACTIVE, 0, 0);
+                    if (hChild)
+                        SendMessageW(hChild, WM_CLOSE, 0, 0);
+                }
+                break;
             case IDM_WINDOW_CLOSE_ALL:
                 // Closes docked + floating; each dirty child gets a prompt.
                 SendMessageW(hMDIClient, FMCM_CLOSEALL, 0, 0);
