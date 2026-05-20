@@ -11,6 +11,15 @@ extern const wchar_t* const kFloatingMDIClientClass;
 // Register the FloatingMDIClient class. Call once at startup.
 ATOM RegisterFloatingMDIClientClass(HINSTANCE hInstance);
 
+// ---- FloatingMDIClient window styles (class-specific, low 16 bits) ----
+// WS_* styles occupy the high bits, so the low word is free for our own.
+
+// Render the tab strip flat, "Chrome-style": custom-painted flat tabs, a
+// hover highlight, and the active tab merged into the content area. Without
+// this style the strip uses the standard Windows tab-control look. Pass it
+// in the style argument of CreateWindow when creating the FMC.
+#define FMCS_FLATTABS 0x00000001L
+
 // Replacement for the system DefFrameProc. The system one's WM_PAINT path
 // loops when the MDI client isn't a real MDICLIENT (50k invalidations/sec).
 // Use this from the frame's WndProc default branch instead of DefFrameProc.

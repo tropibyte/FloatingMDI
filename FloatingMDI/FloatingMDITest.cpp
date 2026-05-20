@@ -163,7 +163,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             hMDIClient = CreateWindowW(
                 kFloatingMDIClientClass,
                 nullptr,
-                WS_CHILD | WS_CLIPCHILDREN | WS_VISIBLE,
+                WS_CHILD | WS_CLIPCHILDREN | WS_VISIBLE | FMCS_FLATTABS,
                 0, 0, 0, 0,
                 hWnd,
                 (HMENU)1,
@@ -222,6 +222,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 CheckMenuItem(GetMenu(hWnd), IDM_VIEW_HIDEFLOATS,
                     MF_BYCOMMAND | (gHideFloats ? MF_CHECKED : MF_UNCHECKED));
                 SendMessageW(hMDIClient, FMCM_SET_HIDEFLOATS, gHideFloats ? TRUE : FALSE, 0);
+                break;
+            case IDM_VIEW_FLATTABS:
+                {
+                    // Toggle the FMCS_FLATTABS window style at runtime; FMC
+                    // reads it live and repaints on WM_STYLECHANGED.
+                    LONG_PTR style = GetWindowLongPtrW(hMDIClient, GWL_STYLE);
+                    bool on = (style & FMCS_FLATTABS) == 0;
+                    style = on ? (style | FMCS_FLATTABS) : (style & ~(LONG_PTR)FMCS_FLATTABS);
+                    SetWindowLongPtrW(hMDIClient, GWL_STYLE, style);
+                    CheckMenuItem(GetMenu(hWnd), IDM_VIEW_FLATTABS,
+                        MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED));
+                }
                 break;
             case IDM_WINDOW_CASCADE:
                 SendMessageW(hMDIClient, WM_MDICASCADE, 0, 0);

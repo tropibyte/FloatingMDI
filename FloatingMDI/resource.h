@@ -28,6 +28,7 @@
 #define IDM_VIEW_DARKWORKSPACE          210
 #define IDM_VIEW_HIDEFLOATS             211
 #define IDM_WINDOW_CLOSE                212
+#define IDM_VIEW_FLATTABS               213
 #define ID_WINDOW                       32771
 #define IDC_STATIC                      -1
 

@@ -44,6 +44,14 @@ static const wchar_t* const kFloatOwnerClass = L"FloatingMDIFloatOwner";
 // Vertical drag past this many pixels on a tab initiates tearoff.
 static const int kTearoffThreshold = 18;
 
+// Flat ("Chrome-style") tab strip palette.
+static const COLORREF kTabStripBg      = RGB(222, 223, 225);  // the tab bar
+static const COLORREF kTabActiveBg     = RGB(255, 255, 255);  // active tab = content
+static const COLORREF kTabHotBg        = RGB(236, 237, 239);  // hovered inactive tab
+static const COLORREF kTabLine         = RGB(193, 195, 198);  // dividers / separator
+static const COLORREF kTabActiveText   = RGB( 32,  32,  34);
+static const COLORREF kTabInactiveText = RGB( 96,  98, 102);
+
 struct ChildEntry
 {
     HWND  hChild       = nullptr;
@@ -285,12 +293,21 @@ static LRESULT CALLBACK FMHWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
 
 // ---- Tab control subclass: detects drag-to-tear gestures ----
 
+// Live read of the FMCS_FLATTABS style — checked at point of use, so toggling
+// the style with SetWindowLong takes effect on the next repaint.
+static bool FlatTabsEnabled(HWND hFMC)
+{
+    return (GetWindowLongW(hFMC, GWL_STYLE) & FMCS_FLATTABS) != 0;
+}
+
 struct TabDragState
 {
-    HWND  hFMC      = nullptr;
-    bool  tracking  = false;
-    POINT startPt   = {};       // screen coords at LBUTTONDOWN
-    int   startTab  = -1;
+    HWND  hFMC         = nullptr;
+    bool  tracking     = false;
+    POINT startPt      = {};    // screen coords at LBUTTONDOWN
+    int   startTab     = -1;
+    int   hotTab       = -1;    // tab under the cursor (flat-mode hover)
+    bool  mouseTracked = false; // TrackMouseEvent armed for WM_MOUSELEAVE
 };
 
 static LRESULT CALLBACK TabSubclassProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam,
@@ -358,8 +375,143 @@ static LRESULT CALLBACK TabSubclassProc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
                 drag->startTab = hit;  // the dragged tab now lives at `hit`
             }
         }
+        else if (FlatTabsEnabled(drag->hFMC))
+        {
+            // Chrome-style hover — track the tab under the cursor.
+            if (!drag->mouseTracked)
+            {
+                TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hWnd, 0 };
+                TrackMouseEvent(&tme);
+                drag->mouseTracked = true;
+            }
+            TCHITTESTINFO ht = {};
+            ht.pt.x = GET_X_LPARAM(lParam);
+            ht.pt.y = GET_Y_LPARAM(lParam);
+            int hot = TabCtrl_HitTest(hWnd, &ht);
+            if (hot != drag->hotTab)
+            {
+                drag->hotTab = hot;
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
+        }
         break;
     }
+
+    case WM_MOUSELEAVE:
+        if (FlatTabsEnabled(drag->hFMC))
+        {
+            drag->mouseTracked = false;
+            if (drag->hotTab != -1)
+            {
+                drag->hotTab = -1;
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
+        }
+        break;
+
+    case WM_ERASEBKGND:
+        if (FlatTabsEnabled(drag->hFMC))
+            return 1;               // flat WM_PAINT paints everything
+        break;                      // else: default tab-control erase
+
+    case WM_PAINT:
+        if (FlatTabsEnabled(drag->hFMC))
+        {
+            PAINTSTRUCT ps;
+            HDC hdcWin = BeginPaint(hWnd, &ps);
+
+            RECT client; GetClientRect(hWnd, &client);
+            int W = client.right, H = client.bottom;
+
+            // Double-buffer — repaints fire on hover, so keep them flicker-free.
+            HDC     hdc    = CreateCompatibleDC(hdcWin);
+            HBITMAP bmp    = CreateCompatibleBitmap(hdcWin, W, H);
+            HGDIOBJ oldBmp = SelectObject(hdc, bmp);
+
+            // Strip height = where the content/body begins.
+            RECT adj = client;
+            TabCtrl_AdjustRect(hWnd, FALSE, &adj);
+            int stripH = adj.top;
+            if (stripH <= 0 || stripH > H) stripH = H;
+
+            HBRUSH bg = CreateSolidBrush(kTabStripBg);
+            FillRect(hdc, &client, bg);
+            DeleteObject(bg);
+
+            int count = TabCtrl_GetItemCount(hWnd);
+            int sel   = TabCtrl_GetCurSel(hWnd);
+
+            HPEN    pen     = CreatePen(PS_SOLID, 1, kTabLine);
+            HGDIOBJ oldPen  = SelectObject(hdc, pen);
+            HFONT   font    = (HFONT)SendMessageW(hWnd, WM_GETFONT, 0, 0);
+            HGDIOBJ oldFont = font ? SelectObject(hdc, font) : nullptr;
+            SetBkMode(hdc, TRANSPARENT);
+
+            for (int i = 0; i < count; i++)
+            {
+                RECT tr;
+                TabCtrl_GetItemRect(hWnd, i, &tr);
+                // Uniform height kills the default selected-tab "pop".
+                RECT tab = { tr.left, 0, tr.right, stripH };
+
+                bool active = (i == sel);
+                bool hot    = (i == drag->hotTab) && !active;
+
+                HBRUSH fb = CreateSolidBrush(active ? kTabActiveBg
+                                           : hot    ? kTabHotBg
+                                                    : kTabStripBg);
+                FillRect(hdc, &tab, fb);
+                DeleteObject(fb);
+
+                // Thin divider between adjacent inactive tabs.
+                if (i > 0 && !active && i - 1 != sel)
+                {
+                    MoveToEx(hdc, tab.left, 5, nullptr);
+                    LineTo(hdc, tab.left, stripH - 5);
+                }
+
+                WCHAR text[256] = L"";
+                TCITEMW tci = {};
+                tci.mask       = TCIF_TEXT;
+                tci.pszText    = text;
+                tci.cchTextMax = ARRAYSIZE(text);
+                TabCtrl_GetItem(hWnd, i, &tci);
+
+                SetTextColor(hdc, active ? kTabActiveText : kTabInactiveText);
+                RECT txt = tab; txt.left += 8; txt.right -= 8;
+                DrawTextW(hdc, text, -1, &txt,
+                          DT_CENTER | DT_VCENTER | DT_SINGLELINE |
+                          DT_END_ELLIPSIS | DT_NOPREFIX);
+            }
+
+            // Bottom separator, gapped under the active tab so it joins the body.
+            int y = stripH - 1;
+            RECT activeRc = {};
+            bool haveActive = (sel >= 0 && sel < count);
+            if (haveActive) TabCtrl_GetItemRect(hWnd, sel, &activeRc);
+            if (haveActive)
+            {
+                MoveToEx(hdc, 0, y, nullptr);              LineTo(hdc, activeRc.left, y);
+                MoveToEx(hdc, activeRc.right, y, nullptr); LineTo(hdc, W, y);
+            }
+            else
+            {
+                MoveToEx(hdc, 0, y, nullptr);              LineTo(hdc, W, y);
+            }
+
+            if (oldFont) SelectObject(hdc, oldFont);
+            SelectObject(hdc, oldPen);
+            DeleteObject(pen);
+
+            BitBlt(hdcWin, 0, 0, W, H, hdc, 0, 0, SRCCOPY);
+
+            SelectObject(hdc, oldBmp);
+            DeleteObject(bmp);
+            DeleteDC(hdc);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+        break;                      // else: default tab-control paint
 
     case WM_LBUTTONUP:
     case WM_CAPTURECHANGED:
@@ -863,7 +1015,8 @@ static LRESULT CALLBACK FMCWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
             TabCtrl_DeleteItem(s->hTabCtrl, 0);
         }
 
-        // Subclass the tab control so we can detect drag-to-tear gestures.
+        // Subclass the tab control: drag-to-tear detection, and (when
+        // FMCS_FLATTABS is set) the flat Chrome-style custom rendering.
         auto* drag = new TabDragState{};
         drag->hFMC = hWnd;
         SetWindowSubclass(s->hTabCtrl, TabSubclassProc, 1, (DWORD_PTR)drag);
@@ -1104,6 +1257,17 @@ static LRESULT CALLBACK FMCWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
         FillRect(hdc, &rc, br);
         return 1;
     }
+
+    case WM_STYLECHANGED:
+        // FMCS_FLATTABS may have been toggled at runtime — repaint the strip
+        // so the new look takes effect immediately (the subclass reads the
+        // style live, so it just needs an invalidate).
+        if ((int)wParam == GWL_STYLE)
+        {
+            auto* s = GetState(hWnd);
+            if (s && s->hTabCtrl) InvalidateRect(s->hTabCtrl, nullptr, TRUE);
+        }
+        return 0;
 
     case WM_NOTIFY:
     {
