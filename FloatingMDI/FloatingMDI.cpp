@@ -24,6 +24,7 @@
 const wchar_t* const kFloatingMDIClientClass = L"FloatingMDIClient";
 const wchar_t* const kFloatingMDIHostClass   = L"FloatingMDIHost";
 static const wchar_t* const kDockHintClass   = L"FloatingMDIDockHint";
+static const wchar_t* const kFloatOwnerClass = L"FloatingMDIFloatOwner";
 
 // FMCM_TEAROFF / FMCM_REDOCK / FMCM_MOVE_TAB are declared in FloatingMDI.h
 // as part of the public FMC message protocol.
@@ -58,6 +59,7 @@ struct FMCState
     HWND  hTabCtrl     = nullptr;   // tab strip across the top
     int   tabStripHeight = 24;      // live-measured height of the tab strip
     HWND  hDockHint    = nullptr;   // layered overlay shown during a redock drag
+    HWND  hFloatOwner  = nullptr;   // hidden owner for floating hosts (see TearOff)
     std::vector<ChildEntry> children;
     HWND  hActive      = nullptr;
     bool  isDestroying = false;
@@ -73,6 +75,23 @@ static FMCState* GetState(HWND hWnd)
 static ChildEntry* FindByChild(FMCState* s, HWND h)
 {
     for (auto& e : s->children) if (e.hChild == h) return &e;
+    return nullptr;
+}
+
+static ChildEntry* FindByHost(FMCState* s, HWND h)
+{
+    for (auto& e : s->children) if (e.hHost == h) return &e;
+    return nullptr;
+}
+
+// The frontmost (highest z-order) floating host, or nullptr if none float.
+static HWND FrontmostFloatHost(FMCState* s)
+{
+    for (HWND h = GetWindow(GetDesktopWindow(), GW_CHILD);
+         h; h = GetWindow(h, GW_HWNDNEXT))
+    {
+        if (FindByHost(s, h)) return h;
+    }
     return nullptr;
 }
 
@@ -367,6 +386,24 @@ static void RefreshWindowMenu(HWND hWnd, FMCState* s);
 static void LayoutDocked(HWND hWnd, FMCState* s);
 static void ActivateChild(HWND hWnd, FMCState* s, HWND hChild);
 
+// The floating hosts are owned by this hidden, never-shown window — NOT by
+// the frame. Ownership keeps them off the taskbar, but a window can never sit
+// below its owner; owning them to the frame would trap the frame permanently
+// behind every float. A neutral hidden owner gives both: no taskbar button,
+// and free z-order relative to the frame (click-to-front works either way).
+static HWND EnsureFloatOwner(HWND hFMC, FMCState* s)
+{
+    if (!s->hFloatOwner)
+    {
+        HINSTANCE hInst = reinterpret_cast<HINSTANCE>(
+            GetWindowLongPtrW(hFMC, GWLP_HINSTANCE));
+        s->hFloatOwner = CreateWindowExW(
+            0, kFloatOwnerClass, nullptr, WS_POPUP,
+            0, 0, 0, 0, nullptr, nullptr, hInst, nullptr);
+    }
+    return s->hFloatOwner;
+}
+
 static void TearOff(HWND hFMC, FMCState* s, HWND hChild, int screenX, int screenY)
 {
     auto* e = FindByChild(s, hChild);
@@ -393,16 +430,13 @@ static void TearOff(HWND hFMC, FMCState* s, HWND hChild, int screenX, int screen
     hs->hOwnerFMC = hFMC;
     hs->hChild    = hChild;
 
-    // Own the host to the frame: it follows the frame in z-order and is
-    // destroyed when the frame is destroyed (no orphan popups, no
-    // independent taskbar entry).
-    HWND hFrame = GetAncestor(hFMC, GA_ROOT);
-
+    // Own the host to the hidden float-owner (not the frame) — see
+    // EnsureFloatOwner. No taskbar button, but free z-order vs. the frame.
     HWND hHost = CreateWindowExW(
         0, kFloatingMDIHostClass, title,
         WS_OVERLAPPEDWINDOW,    // not visible yet — show after reparent
         screenX - w / 4, screenY - 10, w, h,
-        hFrame, nullptr, hInst, hs);
+        EnsureFloatOwner(hFMC, s), nullptr, hInst, hs);
 
     if (!hHost) { delete hs; return; }
 
@@ -929,6 +963,46 @@ static LRESULT CALLBACK FMCWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     }
 
+    case FMCM_CLOSEACTIVE:
+    {
+        auto* s = GetState(hWnd);
+        if (!s) return 0;
+        HWND frame = GetAncestor(hWnd, GA_ROOT);
+        HWND fg    = GetForegroundWindow();
+
+        // 1) A float is in the foreground → close that float. Closure was
+        //    initiated from the float itself, so no forced focus return.
+        if (auto* e = FindByHost(s, fg))
+        {
+            SendMessageW(e->hChild, WM_CLOSE, 0, 0);
+            return 0;
+        }
+
+        // 2) An active docked child → close it (frame keeps focus naturally).
+        if (s->hActive)
+        {
+            SendMessageW(s->hActive, WM_CLOSE, 0, 0);
+            return 0;
+        }
+
+        // 3) No docked children, but floats exist → focus the frontmost
+        //    float, close it, and return focus to the frame on closure.
+        HWND host = FrontmostFloatHost(s);
+        if (host)
+        {
+            auto* e = FindByHost(s, host);
+            if (e)
+            {
+                HWND childHwnd = e->hChild;
+                SetForegroundWindow(host);
+                SendMessageW(childHwnd, WM_CLOSE, 0, 0);
+                if (!IsWindow(childHwnd))          // it actually closed
+                    SetForegroundWindow(frame);    // closure initiated at the frame
+            }
+        }
+        return 0;
+    }
+
     case FMCM_CLOSEALL:
     {
         auto* s = GetState(hWnd);
@@ -1130,6 +1204,7 @@ static LRESULT CALLBACK FMCWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
             for (auto& e : s->children)
                 if (e.hHost && IsWindow(e.hHost)) DestroyWindow(e.hHost);
             s->children.clear();
+            if (s->hFloatOwner) DestroyWindow(s->hFloatOwner);
             // Docked children are real WS_CHILDs of FMC — OS destroys them.
         }
         return 0;
@@ -1184,6 +1259,15 @@ ATOM RegisterFloatingMDIClientClass(HINSTANCE hInstance)
     wcd.hCursor       = LoadCursor(nullptr, IDC_ARROW);
     wcd.lpszClassName = kDockHintClass;
     RegisterClassExW(&wcd);
+
+    // Hidden float-owner class — never shown; just a neutral owner so the
+    // floating hosts stay off the taskbar without being z-trapped to the frame.
+    WNDCLASSEXW wco = {};
+    wco.cbSize        = sizeof(WNDCLASSEXW);
+    wco.lpfnWndProc   = DefWindowProcW;
+    wco.hInstance     = hInstance;
+    wco.lpszClassName = kFloatOwnerClass;
+    RegisterClassExW(&wco);
 
     return fmcAtom;
 }

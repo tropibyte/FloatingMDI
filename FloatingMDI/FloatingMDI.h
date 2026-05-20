@@ -71,3 +71,10 @@ LRESULT DefFloatingMDIChildProc(HWND hChild, UINT msg, WPARAM wParam, LPARAM lPa
 // children closed (none remain), FALSE if any vetoed. A frame's WM_CLOSE
 // handler can gate frame destruction on the result.
 #define FMCM_CLOSEALL (WM_APP + 0x108)
+
+// Close the contextually-active child — intended for a Ctrl+F4 handler.
+// Picks the target by focus: a foreground floating child if one is focused,
+// else the active docked child, else (no docked children) the frontmost
+// float — which is focused first, then closed, with focus returned to the
+// frame afterward. The child still goes through its WM_CLOSE veto path.
+#define FMCM_CLOSEACTIVE (WM_APP + 0x109)

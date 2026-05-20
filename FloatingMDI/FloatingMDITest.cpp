@@ -236,13 +236,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 SendMessageW(hMDIClient, WM_MDIICONARRANGE, 0, 0);
                 break;
             case IDM_WINDOW_CLOSE:
-                {
-                    // Ctrl+F4 — close the active tab via WM_CLOSE so it goes
-                    // through the child's veto/prompt path.
-                    HWND hChild = (HWND)SendMessageW(hMDIClient, WM_MDIGETACTIVE, 0, 0);
-                    if (hChild)
-                        SendMessageW(hChild, WM_CLOSE, 0, 0);
-                }
+                // Ctrl+F4 — FMC picks the contextually-active child (focused
+                // float, active docked child, or frontmost float) and closes
+                // it through the veto/prompt path.
+                SendMessageW(hMDIClient, FMCM_CLOSEACTIVE, 0, 0);
                 break;
             case IDM_WINDOW_CLOSE_ALL:
                 // Closes docked + floating; each dirty child gets a prompt.
