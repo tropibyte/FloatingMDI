@@ -36,6 +36,10 @@ static const wchar_t* const kDockHintClass   = L"FloatingMDIDockHint";
 // wParam = TRUE if the frame just minimized, FALSE if restored/maximized.
 #define FMCM_FRAMEMINIMIZED (WM_APP + 0x180)
 
+// Internal: a child (via DefFloatingMDIChildProc) tells its parent its caption
+// changed. wParam = child HWND. Handled by both FMC (updates tab) and a host.
+#define FMCM_CHILD_TITLECHANGED (WM_APP + 0x181)
+
 // Vertical drag past this many pixels on a tab initiates tearoff.
 static const int kTearoffThreshold = 18;
 
@@ -205,6 +209,19 @@ static LRESULT CALLBACK FMHWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
                 s->pendingRedock = false;
                 PostMessageW(s->hOwnerFMC, FMCM_REDOCK, (WPARAM)hWnd, 0);
             }
+        }
+        return 0;
+    }
+
+    case FMCM_CHILD_TITLECHANGED:
+    {
+        // Our hosted child renamed itself — mirror it to the host caption.
+        auto* s = GetHostState(hWnd);
+        if (s && s->hChild == (HWND)wParam)
+        {
+            WCHAR title[256];
+            GetWindowTextW(s->hChild, title, ARRAYSIZE(title));
+            SetWindowTextW(hWnd, title);
         }
         return 0;
     }
@@ -868,6 +885,28 @@ static LRESULT CALLBACK FMCWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     }
 
+    case FMCM_CHILD_TITLECHANGED:
+    {
+        // A docked child renamed itself — refresh its tab and the Window menu.
+        auto* s = GetState(hWnd);
+        HWND  hChild = (HWND)wParam;
+        if (s && s->hTabCtrl)
+        {
+            int idx = TabIndexFor(s->hTabCtrl, hChild);
+            if (idx >= 0)
+            {
+                WCHAR title[256];
+                GetWindowTextW(hChild, title, ARRAYSIZE(title));
+                TCITEMW tci = {};
+                tci.mask    = TCIF_TEXT;
+                tci.pszText = title;
+                TabCtrl_SetItem(s->hTabCtrl, idx, &tci);
+            }
+            RefreshWindowMenu(hWnd, s);
+        }
+        return 0;
+    }
+
     case FMCM_SET_HIDEFLOATS:
     {
         auto* s = GetState(hWnd);
@@ -1097,9 +1136,12 @@ ATOM RegisterFloatingMDIClientClass(HINSTANCE hInstance)
     icc.dwICC  = ICC_TAB_CLASSES;
     InitCommonControlsEx(&icc);
 
+    // CS_GLOBALCLASS: like the system MDICLIENT, FloatingMDIClient is usable
+    // by any module in the process and referenceable by name (e.g. from a
+    // dialog template), not just the registering module.
     WNDCLASSEXW wcex = {};
     wcex.cbSize        = sizeof(WNDCLASSEXW);
-    wcex.style         = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+    wcex.style         = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS | CS_GLOBALCLASS;
     wcex.lpfnWndProc   = FMCWndProc;
     wcex.hInstance     = hInstance;
     wcex.hCursor       = LoadCursor(nullptr, IDC_ARROW);
@@ -1170,4 +1212,28 @@ LRESULT DefFloatingFrameProc(HWND hWnd, HWND hMDIClient,
         }
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+// -----------------------------------------------------------------------------
+// DefFloatingMDIChildProc — child-side default proc, the counterpart to
+// DefMDIChildProc. A child's WndProc forwards unhandled messages here.
+//
+// Currently: reflects WM_SETTEXT to the parent so the tab text (when docked)
+// or the host caption (when floating) tracks the child's caption live. The
+// parent — FMC or FloatingMDIHost — is found via GetParent, so the same code
+// works in both states. This is the extension point for further child-side
+// plumbing; everything else falls through to DefWindowProc.
+// -----------------------------------------------------------------------------
+LRESULT DefFloatingMDIChildProc(HWND hChild, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_SETTEXT)
+    {
+        // Apply the caption change first, then notify the parent.
+        LRESULT r = DefWindowProcW(hChild, msg, wParam, lParam);
+        HWND parent = GetParent(hChild);
+        if (parent)
+            SendMessageW(parent, FMCM_CHILD_TITLECHANGED, (WPARAM)hChild, 0);
+        return r;
+    }
+    return DefWindowProcW(hChild, msg, wParam, lParam);
 }

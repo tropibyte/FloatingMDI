@@ -95,7 +95,7 @@ ATOM MyRegisterChildClass(HINSTANCE hInstance)
 {
     WNDCLASSEXW wcex = {};
     wcex.cbSize        = sizeof(WNDCLASSEX);
-    wcex.style         = CS_HREDRAW | CS_VREDRAW;
+    wcex.style         = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wcex.lpfnWndProc   = MDIChildWndProc;
     wcex.hInstance     = hInstance;
     wcex.hIcon         = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_SMALL));
@@ -295,8 +295,26 @@ LRESULT CALLBACK MDIChildWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM 
             EndPaint(hWnd, &ps);
         }
         return 0;
+
+    case WM_LBUTTONDBLCLK:
+        {
+            // Demo: rename the child on double-click to exercise live
+            // tab-title sync. Toggles a " *" suffix on the caption.
+            WCHAR title[MAX_LOADSTRING + 16];
+            GetWindowTextW(hWnd, title, ARRAYSIZE(title));
+            int len = lstrlenW(title);
+            if (len >= 2 && title[len - 2] == L' ' && title[len - 1] == L'*')
+                title[len - 2] = L'\0';
+            else
+                lstrcatW(title, L" *");
+            SetWindowTextW(hWnd, title);   // → DefFloatingMDIChildProc syncs the tab
+            InvalidateRect(hWnd, nullptr, TRUE);
+        }
+        return 0;
     }
-    return DefMDIChildProc(hWnd, message, wParam, lParam);
+    // Forward to the child-side default proc (counterpart to DefMDIChildProc)
+    // so caption changes propagate to the tab / floating host.
+    return DefFloatingMDIChildProc(hWnd, message, wParam, lParam);
 }
 
 // Message handler for about box.

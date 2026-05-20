@@ -17,6 +17,14 @@ ATOM RegisterFloatingMDIClientClass(HINSTANCE hInstance);
 LRESULT DefFloatingFrameProc(HWND hWnd, HWND hMDIClient,
                              UINT msg, WPARAM wParam, LPARAM lParam);
 
+// Child-side default proc — the counterpart to DefMDIChildProc, completing
+// the triad: DefFloatingFrameProc / FloatingMDIClient / DefFloatingMDIChildProc.
+// An MDI child's WndProc should forward unhandled messages here instead of to
+// DefWindowProc to get FloatingMDI child behaviors — currently live tab-title
+// sync when the child changes its caption (WM_SETTEXT). Opt-in: a child that
+// keeps using DefWindowProc still works, just without these behaviors.
+LRESULT DefFloatingMDIChildProc(HWND hChild, UINT msg, WPARAM wParam, LPARAM lParam);
+
 // ---- FloatingMDIClient message protocol (beyond the standard WM_MDI*) ----
 // The frame (or any code holding the FMC handle) may send these.
 
