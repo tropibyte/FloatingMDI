@@ -10,7 +10,11 @@ WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 WCHAR szChildClass[MAX_LOADSTRING];             // the MDI child window class name
 HWND hMDIClient = nullptr;                      // MDI client window handle
+HWND hMainFrame = nullptr;                      // main MDI frame window handle
 int  gChildCount = 0;                           // running counter for child window titles
+bool gDarkWorkspace = false;                    // Options > Dark Workspace
+bool gHideFloats   = false;                     // Options > Hide Floats When Minimized
+HBRUSH gWorkspaceBrush = nullptr;               // custom workspace brush (lazy)
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -52,8 +56,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     // reach the MDI client before regular accelerators or dispatch.
     while (GetMessage(&msg, nullptr, 0, 0))
     {
-        if (!TranslateMDISysAccel(hMDIClient, &msg) &&
-            !TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+        // Translate against the FRAME, not msg.hwnd. With FMC's children
+        // not chained via DefMDIChildProc, focus typically sits on a child
+        // (or a floating host) — sending WM_COMMAND there would drop the
+        // command. The frame's WndProc is what actually handles them.
+        if (!TranslateAccelerator(hMainFrame, hAccelTable, &msg))
         {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
@@ -112,6 +119,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
       return FALSE;
    }
 
+   hMainFrame = hWnd;
    ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);
 
@@ -155,7 +163,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             hMDIClient = CreateWindowW(
                 kFloatingMDIClientClass,
                 nullptr,
-                WS_CHILD | WS_CLIPCHILDREN | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL,
+                WS_CHILD | WS_CLIPCHILDREN | WS_VISIBLE,
                 0, 0, 0, 0,
                 hWnd,
                 (HMENU)1,
@@ -183,6 +191,38 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             case IDM_EXIT:
                 DestroyWindow(hWnd);
                 break;
+            case IDM_WINDOW_NEXT:
+                SendMessageW(hMDIClient, WM_MDINEXT, 0, 0);
+                break;
+            case IDM_WINDOW_PREV:
+                SendMessageW(hMDIClient, WM_MDINEXT, 0, 1);
+                break;
+            case IDM_WINDOW_MOVE_LEFT:
+                {
+                    int idx = (int)SendMessageW(hMDIClient, FMCM_GETACTIVETAB, 0, 0);
+                    if (idx > 0)
+                        SendMessageW(hMDIClient, FMCM_MOVE_TAB, idx, idx - 1);
+                }
+                break;
+            case IDM_WINDOW_MOVE_RIGHT:
+                {
+                    int idx = (int)SendMessageW(hMDIClient, FMCM_GETACTIVETAB, 0, 0);
+                    if (idx >= 0)
+                        SendMessageW(hMDIClient, FMCM_MOVE_TAB, idx, idx + 1);
+                }
+                break;
+            case IDM_VIEW_DARKWORKSPACE:
+                gDarkWorkspace = !gDarkWorkspace;
+                CheckMenuItem(GetMenu(hWnd), IDM_VIEW_DARKWORKSPACE,
+                    MF_BYCOMMAND | (gDarkWorkspace ? MF_CHECKED : MF_UNCHECKED));
+                InvalidateRect(hMDIClient, nullptr, TRUE);
+                break;
+            case IDM_VIEW_HIDEFLOATS:
+                gHideFloats = !gHideFloats;
+                CheckMenuItem(GetMenu(hWnd), IDM_VIEW_HIDEFLOATS,
+                    MF_BYCOMMAND | (gHideFloats ? MF_CHECKED : MF_UNCHECKED));
+                SendMessageW(hMDIClient, FMCM_SET_HIDEFLOATS, gHideFloats ? TRUE : FALSE, 0);
+                break;
             case IDM_WINDOW_CASCADE:
                 SendMessageW(hMDIClient, WM_MDICASCADE, 0, 0);
                 break;
@@ -206,20 +246,32 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 }
                 break;
             default:
-                // Commands in the [50000, 50000+N) range are MDI child-activation
-                // items that MDI itself appends to the Window menu — let DefFrameProc
-                // dispatch them. Same for any unhandled IDs.
-                return DefFrameProc(hWnd, hMDIClient, message, wParam, lParam);
+                // Child-activation IDs (>= idFirstChild) come from the Window
+                // menu. DefFloatingFrameProc forwards them to the MDI client.
+                return DefFloatingFrameProc(hWnd, hMDIClient, message, wParam, lParam);
             }
         }
         break;
 
+    case FMCM_CTLCOLOR:
+        // FMC asks for a surface color. Override the workspace when the
+        // "Dark Workspace" option is on; otherwise decline (return 0) and
+        // FMC uses its default grey.
+        if (gDarkWorkspace && lParam == FMC_CLR_WORKSPACE)
+        {
+            if (!gWorkspaceBrush)
+                gWorkspaceBrush = CreateSolidBrush(RGB(32, 32, 38));
+            return (LRESULT)gWorkspaceBrush;
+        }
+        return 0;
+
     case WM_DESTROY:
+        if (gWorkspaceBrush) DeleteObject(gWorkspaceBrush);
         PostQuitMessage(0);
         break;
 
     default:
-        return DefFrameProc(hWnd, hMDIClient, message, wParam, lParam);
+        return DefFloatingFrameProc(hWnd, hMDIClient, message, wParam, lParam);
     }
     return 0;
 }

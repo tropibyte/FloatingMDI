@@ -21,6 +21,12 @@
 #define IDM_WINDOW_TILE_VERT            203
 #define IDM_WINDOW_ARRANGE              204
 #define IDM_WINDOW_CLOSE_ALL            205
+#define IDM_WINDOW_NEXT                 206
+#define IDM_WINDOW_PREV                 207
+#define IDM_WINDOW_MOVE_LEFT            208
+#define IDM_WINDOW_MOVE_RIGHT           209
+#define IDM_VIEW_DARKWORKSPACE          210
+#define IDM_VIEW_HIDEFLOATS             211
 #define ID_WINDOW                       32771
 #define IDC_STATIC                      -1
 
